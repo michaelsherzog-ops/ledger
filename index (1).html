@@ -1,0 +1,1337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Ledger" />
+  <meta name="theme-color" content="#f4f0e7" />
+  <title>The Ledger · Investment Journal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Icon: cream square with a dark glyph -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%232a2620'/%3E%3Ctext x='50' y='72' font-family='Georgia' font-size='64' fill='%23f4f0e7' text-anchor='middle'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%232a2620'/%3E%3Ctext x='50' y='72' font-family='Georgia' font-size='64' fill='%23f4f0e7' text-anchor='middle'%3E%E2%8C%98%3C/text%3E%3C/svg%3E" />
+
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #f4f0e7; min-height: 100vh; overscroll-behavior: none; }
+    body { font-family: 'Inter', -apple-system, sans-serif; color: #2a2620; }
+    button { cursor: pointer; font-family: inherit; }
+    input, textarea, select { font-family: inherit; }
+    textarea { resize: vertical; font-family: inherit; }
+    ::selection { background: #e8d9a8; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #f4f0e7; }
+    ::-webkit-scrollbar-thumb { background: #c9bfa9; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #a89a7f; }
+    #root { min-height: 100vh; }
+    .loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: Fraunces, serif; color: #3a342a; font-size: 18px; font-style: italic; }
+
+    /* Mobile: stack sidebar on top */
+    @media (max-width: 760px) {
+      .app-shell { flex-direction: column !important; }
+      .sidebar { width: 100% !important; height: auto !important; position: static !important; border-right: none !important; border-bottom: 1px solid #d9d2c3 !important; padding: 16px 16px !important; }
+      .sidebar-footer { display: none !important; }
+      .sidebar-nav { flex-direction: row !important; overflow-x: auto; gap: 6px !important; }
+      .content-wrap { padding: 20px 16px 48px !important; }
+      .top-bar { padding: 12px 16px !important; }
+      .page-title { font-size: 30px !important; }
+      .thesis-detail-title { font-size: 26px !important; }
+      .two-col { grid-template-columns: 1fr !important; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+      .field-row { grid-template-columns: 1fr !important; }
+      .modal { max-height: calc(100vh - 40px) !important; }
+      .modal-overlay { padding: 20px 12px !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"><div class="loading">Loading ledger…</div></div>
+
+  <!-- React via CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-type="module">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // ===== Storage: simple auto-save to browser storage =====
+    // When hosted at a stable URL, localStorage persists forever.
+    // Every change saves automatically. Export/Import for portability.
+    const STORAGE_KEY = 'ledger-data-v3';
+
+    const store = {
+      load: () => {
+        try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : null; }
+        catch { return null; }
+      },
+      save: (data) => {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); return true; }
+        catch { return false; }
+      }
+    };
+
+    // ===== Constants =====
+    const DEFAULT_BIASES = [
+      'Confirmation bias', 'Anchoring', 'Recency bias', 'FOMO',
+      'Loss aversion', 'Overconfidence', 'Narrative fallacy', 'Hindsight bias',
+      'Availability heuristic', 'Herding', 'Sunk cost fallacy', 'Endowment effect',
+      'Disposition effect', "Gambler's fallacy", 'Authority bias'
+    ];
+    const DEFAULT_ERRORS = [
+      'Position too large', 'Position too small', 'Entered too early', 'Entered too late',
+      'Exited too early', 'Exited too late', 'Ignored invalidation signal', 'Weak research',
+      'Followed tip without DD', 'Let thesis drift', 'Mis-sized to conviction', 'Ignored risk mgmt',
+      'No exit plan', 'Averaged down on loser', 'Concentrated too heavily', 'Wrong time horizon'
+    ];
+    const ENTRY_TYPES = {
+      idea: { label: 'Idea', icon: '✦', color: '#7c5e3c' },
+      thesis: { label: 'Thesis', icon: '◈', color: '#2d4a3e' },
+      update: { label: 'Update', icon: '→', color: '#3b4a5e' },
+      postmortem: { label: 'Post-mortem', icon: '◉', color: '#7a2f2f' },
+      note: { label: 'Note', icon: '·', color: '#555' }
+    };
+
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    const fmtDateTime = (ts) => {
+      const d = new Date(ts);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+        ' · ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    };
+    const daysSince = (ts) => Math.floor((Date.now() - ts) / (1000 * 60 * 60 * 24));
+
+    // ===== Inline icons (no external library needed) =====
+    const Icon = ({ d, size = 14, stroke = 1.5 }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        {d}
+      </svg>
+    );
+    const I = {
+      Plus: (p) => <Icon {...p} d={<><path d="M12 5v14M5 12h14"/></>} />,
+      Search: (p) => <Icon {...p} d={<><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></>} />,
+      X: (p) => <Icon {...p} d={<><path d="M18 6 6 18M6 6l12 12"/></>} />,
+      Lock: (p) => <Icon {...p} d={<><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>} />,
+      Trash: (p) => <Icon {...p} d={<><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></>} />,
+      Download: (p) => <Icon {...p} d={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></>} />,
+      Upload: (p) => <Icon {...p} d={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></>} />,
+      Chevron: (p) => <Icon {...p} d={<><path d="m9 18 6-6-6-6"/></>} />,
+      Warning: (p) => <Icon {...p} d={<><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3zM12 9v4M12 17h.01"/></>} />,
+      Book: (p) => <Icon {...p} d={<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>} />,
+      File: (p) => <Icon {...p} d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8"/></>} />,
+      Target: (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></>} />,
+      Scale: (p) => <Icon {...p} d={<><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1zM2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1zM7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></>} />,
+      ArrowUpRight: (p) => <Icon {...p} d={<><path d="M7 7h10v10M7 17 17 7"/></>} />,
+      ArrowDownRight: (p) => <Icon {...p} d={<><path d="M7 7l10 10M17 7v10H7"/></>} />,
+      Minus: (p) => <Icon {...p} d={<><path d="M5 12h14"/></>} />,
+      Hash: (p) => <Icon {...p} d={<><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></>} />
+    };
+
+    // ===== Main App =====
+    function InvestmentJournal() {
+      const [data, setData] = useState({ theses: [], entries: [], rules: [], customBiases: [], customErrors: [] });
+      const [loaded, setLoaded] = useState(false);
+      const [view, setView] = useState('dashboard');
+      const [selectedThesis, setSelectedThesis] = useState(null);
+      const [composerOpen, setComposerOpen] = useState(false);
+      const [composerMode, setComposerMode] = useState('note');
+      const [composerThesisId, setComposerThesisId] = useState(null);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [saveStatus, setSaveStatus] = useState('saved');
+      const [lastSavedAt, setLastSavedAt] = useState(null);
+      const skipSave = useRef(true);
+      const saveTimer = useRef(null);
+
+      // Load on startup
+      useEffect(() => {
+        const loaded = store.load();
+        if (loaded) {
+          setData({
+            theses: loaded.theses || [],
+            entries: loaded.entries || [],
+            rules: loaded.rules || [],
+            customBiases: loaded.customBiases || [],
+            customErrors: loaded.customErrors || []
+          });
+          setLastSavedAt(Date.now());
+        }
+        setLoaded(true);
+      }, []);
+
+      // Auto-save on every change (debounced)
+      useEffect(() => {
+        if (!loaded) return;
+        if (skipSave.current) { skipSave.current = false; return; }
+        setSaveStatus('saving');
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => {
+          const ok = store.save(data);
+          if (ok) {
+            setLastSavedAt(Date.now());
+            setSaveStatus('saved');
+          } else {
+            setSaveStatus('error');
+          }
+        }, 250);
+      }, [data, loaded]);
+
+      // Export: download JSON backup
+      const handleExport = () => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ledger-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      // Import: replace or merge from a JSON backup
+      const handleImport = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.onchange = async (e) => {
+          const f = e.target.files[0];
+          if (!f) return;
+          try {
+            const imported = JSON.parse(await f.text());
+            const merge = confirm('OK = merge with existing data.  Cancel = replace everything with imported data.');
+            skipSave.current = false;
+            if (merge) {
+              setData(d => ({
+                theses: [...(imported.theses || []), ...d.theses],
+                entries: [...(imported.entries || []), ...d.entries],
+                rules: [...(imported.rules || []), ...d.rules],
+                customBiases: [...new Set([...(imported.customBiases || []), ...d.customBiases])],
+                customErrors: [...new Set([...(imported.customErrors || []), ...d.customErrors])]
+              }));
+            } else {
+              setData({
+                theses: imported.theses || [],
+                entries: imported.entries || [],
+                rules: imported.rules || [],
+                customBiases: imported.customBiases || [],
+                customErrors: imported.customErrors || []
+              });
+            }
+          } catch (err) {
+            alert('Could not import file: ' + err.message);
+          }
+        };
+        input.click();
+      };
+
+      const allBiases = useMemo(() => [...DEFAULT_BIASES, ...data.customBiases], [data.customBiases]);
+      const allErrors = useMemo(() => [...DEFAULT_ERRORS, ...data.customErrors], [data.customErrors]);
+
+      const addEntry = (entry) => {
+        const e = { ...entry, id: uid(), createdAt: Date.now() };
+        setData(d => ({ ...d, entries: [e, ...d.entries] }));
+      };
+      const addThesis = (thesis) => {
+        const t = { ...thesis, id: uid(), createdAt: Date.now(), status: 'active', locked: true };
+        setData(d => ({ ...d, theses: [t, ...d.theses] }));
+        return t;
+      };
+      const updateThesisStatus = (id, patch) => {
+        setData(d => ({ ...d, theses: d.theses.map(t => t.id === id ? { ...t, ...patch } : t) }));
+      };
+      const deleteEntry = (id) => setData(d => ({ ...d, entries: d.entries.filter(e => e.id !== id) }));
+      const deleteThesis = (id) => setData(d => ({
+        ...d,
+        theses: d.theses.filter(t => t.id !== id),
+        entries: d.entries.filter(e => e.thesisId !== id)
+      }));
+      const addRule = (text, source) => {
+        const r = { id: uid(), text, source: source || '', createdAt: Date.now() };
+        setData(d => ({ ...d, rules: [r, ...d.rules] }));
+      };
+      const deleteRule = (id) => setData(d => ({ ...d, rules: d.rules.filter(r => r.id !== id) }));
+
+      const openComposer = (mode, thesisId = null) => {
+        setComposerMode(mode);
+        setComposerThesisId(thesisId);
+        setComposerOpen(true);
+      };
+
+      if (!loaded) return <div className="loading">Loading ledger…</div>;
+
+      return (
+        <div className="app-shell" style={styles.app}>
+          <Sidebar
+            view={view}
+            setView={(v) => { setView(v); setSelectedThesis(null); }}
+            data={data}
+            openComposer={openComposer}
+            saveStatus={saveStatus}
+            lastSavedAt={lastSavedAt}
+            onExport={handleExport}
+            onImport={handleImport}
+          />
+          <main style={styles.main}>
+            <TopBar
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              saveStatus={saveStatus}
+              lastSavedAt={lastSavedAt}
+            />
+            <div className="content-wrap" style={styles.content}>
+              {searchQuery.trim() ? (
+                <SearchView query={searchQuery} data={data} onOpenThesis={(id) => { setSelectedThesis(id); setView('theses'); setSearchQuery(''); }} />
+              ) : selectedThesis ? (
+                <ThesisDetail
+                  thesis={data.theses.find(t => t.id === selectedThesis)}
+                  entries={data.entries.filter(e => e.thesisId === selectedThesis)}
+                  onBack={() => setSelectedThesis(null)}
+                  onAddUpdate={(id) => openComposer('update', id)}
+                  onAddPostmortem={(id) => openComposer('postmortem', id)}
+                  onClose={(id, patch) => updateThesisStatus(id, patch)}
+                  onDelete={(id) => { if (confirm('Delete thesis and all linked entries?')) { deleteThesis(id); setSelectedThesis(null); } }}
+                  deleteEntry={deleteEntry}
+                />
+              ) : (
+                <>
+                  {view === 'dashboard' && <Dashboard data={data} openComposer={openComposer} onOpenThesis={(id) => setSelectedThesis(id)} setView={setView} />}
+                  {view === 'journal' && <Journal data={data} deleteEntry={deleteEntry} onOpenThesis={(id) => setSelectedThesis(id)} />}
+                  {view === 'theses' && <ThesesList theses={data.theses} entries={data.entries} onOpen={(id) => setSelectedThesis(id)} openComposer={openComposer} />}
+                  {view === 'rules' && <RulesView data={data} addRule={addRule} deleteRule={deleteRule} />}
+                </>
+              )}
+            </div>
+          </main>
+          {composerOpen && (
+            <Composer
+              mode={composerMode}
+              thesisId={composerThesisId}
+              theses={data.theses}
+              allBiases={allBiases}
+              allErrors={allErrors}
+              onClose={() => setComposerOpen(false)}
+              onSubmitEntry={(entry) => { addEntry(entry); setComposerOpen(false); }}
+              onSubmitThesis={(t) => { const created = addThesis(t); setComposerOpen(false); setSelectedThesis(created.id); }}
+              onAddCustomTag={(kind, val) => {
+                setData(d => ({
+                  ...d,
+                  [kind === 'bias' ? 'customBiases' : 'customErrors']: [
+                    ...(kind === 'bias' ? d.customBiases : d.customErrors), val
+                  ]
+                }));
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ===== Sidebar =====
+    function Sidebar({ view, setView, data, openComposer, saveStatus, lastSavedAt, onExport, onImport }) {
+      const activeTheses = data.theses.filter(t => t.status === 'active').length;
+      const navItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: I.Book },
+        { id: 'journal', label: 'Journal', icon: I.File, count: data.entries.length },
+        { id: 'theses', label: 'Theses', icon: I.Target, count: activeTheses },
+        { id: 'rules', label: 'Rules', icon: I.Scale, count: data.rules.length }
+      ];
+
+      const statusMap = {
+        saving: { dot: '#c49632', text: 'Saving…', color: '#7c5e3c' },
+        saved:  { dot: '#2d7a4e', text: 'All saved', color: '#2d4a3e' },
+        error:  { dot: '#a04040', text: 'Save failed', color: '#7a2f2f' }
+      };
+      const s = statusMap[saveStatus] || statusMap.saved;
+
+      return (
+        <aside className="sidebar" style={styles.sidebar}>
+          <div style={styles.brand}>
+            <div style={styles.brandMark}>⌘</div>
+            <div>
+              <div style={styles.brandTitle}>The Ledger</div>
+              <div style={styles.brandSub}>Investment Journal</div>
+            </div>
+          </div>
+
+          <div style={styles.statusPanel}>
+            <div style={styles.statusRow}>
+              <span style={{ ...styles.statusDot, background: s.dot }} />
+              <span style={{ ...styles.statusText, color: s.color }}>{s.text}</span>
+            </div>
+            {lastSavedAt && saveStatus !== 'saving' && (
+              <div style={styles.statusTime}>{fmtDateTime(lastSavedAt)}</div>
+            )}
+          </div>
+
+          <button style={styles.primaryBtn} onClick={() => openComposer('note')}>
+            <I.Plus size={14} /> New Entry
+          </button>
+          <nav className="sidebar-nav" style={styles.nav}>
+            {navItems.map(item => {
+              const IconComp = item.icon;
+              const active = view === item.id;
+              return (
+                <button key={item.id} onClick={() => setView(item.id)} style={{ ...styles.navItem, ...(active ? styles.navItemActive : {}) }}>
+                  <IconComp size={15} />
+                  <span style={{ flex: 1, textAlign: 'left' }}>{item.label}</span>
+                  {item.count > 0 && <span style={styles.navCount}>{item.count}</span>}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="sidebar-footer" style={styles.sidebarFooter}>
+            <div style={styles.sidebarLabel}>Quick Actions</div>
+            <button style={styles.ghostBtn} onClick={() => openComposer('thesis')}><I.Target size={13} /> New Thesis</button>
+            <button style={styles.ghostBtn} onClick={() => openComposer('idea')}><span style={{ fontSize: 13 }}>✦</span> New Idea</button>
+            <button style={styles.ghostBtn} onClick={() => openComposer('postmortem')}><span style={{ fontSize: 13 }}>◉</span> Post-mortem</button>
+            <div style={{ height: 1, background: '#d9d2c3', margin: '12px 0' }} />
+            <button style={styles.ghostBtn} onClick={onExport}><I.Download size={13} /> Export backup</button>
+            <button style={styles.ghostBtn} onClick={onImport}><I.Upload size={13} /> Import</button>
+          </div>
+        </aside>
+      );
+    }
+
+    function TopBar({ searchQuery, setSearchQuery, saveStatus, lastSavedAt }) {
+      const showSaving = saveStatus === 'saving';
+      const showSaved = saveStatus === 'saved';
+      const showError = saveStatus === 'error';
+      return (
+        <div className="top-bar" style={styles.topBar}>
+          <div style={styles.searchWrap}>
+            <I.Search size={14} />
+            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search entries, theses, tickers, tags…" style={styles.searchInput} />
+            {searchQuery && <button onClick={() => setSearchQuery('')} style={styles.searchClear}><I.X size={12} /></button>}
+          </div>
+          <div style={styles.topBarRight}>
+            {showSaving && <span style={{ ...styles.savedIndicator, color: '#7c5e3c' }}>Saving…</span>}
+            {showSaved && <span style={styles.savedIndicator}>✓ Saved</span>}
+            {showError && <span style={{ ...styles.savedIndicator, color: '#7a2f2f' }}>⚠ Save failed</span>}
+            <div style={styles.dateLabel}>
+              {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Dashboard({ data, openComposer, onOpenThesis, setView }) {
+      const activeTheses = data.theses.filter(t => t.status === 'active');
+      const recentEntries = data.entries.slice(0, 5);
+      const biasCounts = {}, errorCounts = {};
+      data.entries.forEach(e => {
+        (e.biases || []).forEach(b => { biasCounts[b] = (biasCounts[b] || 0) + 1; });
+        (e.errors || []).forEach(err => { errorCounts[err] = (errorCounts[err] || 0) + 1; });
+      });
+      const topBiases = Object.entries(biasCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const topErrors = Object.entries(errorCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const creepAlerts = activeTheses.map(t => {
+        const updates = data.entries.filter(e => e.thesisId === t.id && e.type === 'update');
+        return { thesis: t, updateCount: updates.length, age: daysSince(t.createdAt) };
+      }).filter(x => x.updateCount >= 3).sort((a, b) => b.updateCount - a.updateCount);
+      const closed = data.theses.filter(t => t.status !== 'active');
+      const wins = closed.filter(t => t.outcome === 'win').length;
+      const losses = closed.filter(t => t.outcome === 'loss').length;
+      const breakeven = closed.filter(t => t.outcome === 'breakeven').length;
+
+      return (
+        <div style={styles.dashboard}>
+          <header style={styles.pageHeader}>
+            <div>
+              <h1 className="page-title" style={styles.pageTitle}>Dashboard</h1>
+              <p style={styles.pageSub}>Your thinking, catalogued.</p>
+            </div>
+          </header>
+          <div className="stats-grid" style={styles.statsGrid}>
+            <StatCard label="Active Theses" value={activeTheses.length} accent="#2d4a3e" />
+            <StatCard label="Total Entries" value={data.entries.length} accent="#3b4a5e" />
+            <StatCard label="Trading Rules" value={data.rules.length} accent="#7c5e3c" />
+            <StatCard label="Closed Record" value={`${wins}W · ${losses}L${breakeven ? ` · ${breakeven}=` : ''}`} accent="#555" small />
+          </div>
+          {creepAlerts.length > 0 && (
+            <section style={styles.section}>
+              <div style={styles.sectionHeader}>
+                <h2 style={styles.sectionTitle}>
+                  <I.Warning size={14} /> Thesis Creep Watchlist
+                </h2>
+                <span style={styles.sectionSub}>3+ updates. Re-read the locked original.</span>
+              </div>
+              <div style={styles.creepList}>
+                {creepAlerts.map(({ thesis, updateCount, age }) => (
+                  <div key={thesis.id} style={styles.creepItem} onClick={() => onOpenThesis(thesis.id)}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={styles.creepTicker}>{thesis.ticker || thesis.name}</div>
+                      <div style={styles.creepThesis}>{thesis.thesisStatement?.slice(0, 100)}{thesis.thesisStatement?.length > 100 ? '…' : ''}</div>
+                    </div>
+                    <div style={styles.creepMeta}>
+                      <div><strong>{updateCount}</strong> updates</div>
+                      <div style={styles.creepAge}>{age}d old</div>
+                    </div>
+                    <I.Chevron size={16} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          <div className="two-col" style={styles.twoCol}>
+            <section style={styles.section}>
+              <div style={styles.sectionHeader}>
+                <h2 style={styles.sectionTitle}>Active Theses</h2>
+                <button style={styles.linkBtn} onClick={() => setView('theses')}>View all →</button>
+              </div>
+              {activeTheses.length === 0 ? (
+                <EmptyState text="No active theses yet." cta="Start your first" onClick={() => openComposer('thesis')} />
+              ) : (
+                <div style={styles.thesisList}>
+                  {activeTheses.slice(0, 4).map(t => (
+                    <div key={t.id} style={styles.thesisCard} onClick={() => onOpenThesis(t.id)}>
+                      <div style={styles.thesisCardHead}>
+                        <div style={styles.thesisTicker}>{t.ticker || t.name?.slice(0, 12)}</div>
+                        <div style={styles.thesisAge}>{daysSince(t.createdAt)}d</div>
+                      </div>
+                      <div style={styles.thesisStatement}>
+                        {t.thesisStatement?.slice(0, 120)}{t.thesisStatement?.length > 120 ? '…' : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+            <section style={styles.section}>
+              <div style={styles.sectionHeader}>
+                <h2 style={styles.sectionTitle}>Recent Entries</h2>
+                <button style={styles.linkBtn} onClick={() => setView('journal')}>View all →</button>
+              </div>
+              {recentEntries.length === 0 ? (
+                <EmptyState text="Nothing logged yet." cta="Write your first entry" onClick={() => openComposer('note')} />
+              ) : (
+                <div style={styles.entryMiniList}>
+                  {recentEntries.map(e => {
+                    const linkedThesis = data.theses.find(t => t.id === e.thesisId);
+                    const type = ENTRY_TYPES[e.type] || ENTRY_TYPES.note;
+                    return (
+                      <div key={e.id} style={styles.entryMini}>
+                        <div style={{ ...styles.entryMiniIcon, color: type.color }}>{type.icon}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={styles.entryMiniTitle}>{e.title || e.body?.slice(0, 60) || 'Untitled'}</div>
+                          <div style={styles.entryMiniMeta}>{type.label} · {fmtDate(e.createdAt)}{linkedThesis && ` · ${linkedThesis.ticker || linkedThesis.name}`}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+          <div className="two-col" style={styles.twoCol}>
+            <section style={styles.section}>
+              <div style={styles.sectionHeader}>
+                <h2 style={styles.sectionTitle}>Most-Flagged Biases</h2>
+                <span style={styles.sectionSub}>From your tags</span>
+              </div>
+              {topBiases.length === 0 ? <EmptyState text="Tag biases in entries to spot patterns." /> : (
+                <div style={styles.freqList}>
+                  {topBiases.map(([name, count]) => (
+                    <div key={name} style={styles.freqRow}><span>{name}</span><span style={styles.freqCount}>×{count}</span></div>
+                  ))}
+                </div>
+              )}
+            </section>
+            <section style={styles.section}>
+              <div style={styles.sectionHeader}>
+                <h2 style={styles.sectionTitle}>Most-Flagged Errors</h2>
+                <span style={styles.sectionSub}>Patterns become rules</span>
+              </div>
+              {topErrors.length === 0 ? <EmptyState text="No errors tagged yet." /> : (
+                <div style={styles.freqList}>
+                  {topErrors.map(([name, count]) => (
+                    <div key={name} style={styles.freqRow}><span>{name}</span><span style={styles.freqCount}>×{count}</span></div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      );
+    }
+
+    function StatCard({ label, value, accent, small }) {
+      return (
+        <div style={{ ...styles.statCard, borderLeftColor: accent }}>
+          <div style={styles.statLabel}>{label}</div>
+          <div style={{ ...styles.statValue, fontSize: small ? 22 : 32 }}>{value}</div>
+        </div>
+      );
+    }
+
+    function EmptyState({ text, cta, onClick }) {
+      return (
+        <div style={styles.empty}>
+          <div style={styles.emptyText}>{text}</div>
+          {cta && <button style={styles.emptyCta} onClick={onClick}>{cta} →</button>}
+        </div>
+      );
+    }
+
+    function Journal({ data, deleteEntry, onOpenThesis }) {
+      const [filterType, setFilterType] = useState('all');
+      const [filterTag, setFilterTag] = useState('');
+      const filtered = useMemo(() => data.entries.filter(e => {
+        if (filterType !== 'all' && e.type !== filterType) return false;
+        if (filterTag) {
+          const tags = [...(e.biases || []), ...(e.errors || []), ...(e.tags || [])];
+          if (!tags.some(t => t.toLowerCase().includes(filterTag.toLowerCase()))) return false;
+        }
+        return true;
+      }), [data.entries, filterType, filterTag]);
+      return (
+        <div>
+          <header style={styles.pageHeader}>
+            <div>
+              <h1 className="page-title" style={styles.pageTitle}>Journal</h1>
+              <p style={styles.pageSub}>{data.entries.length} entries · chronological</p>
+            </div>
+          </header>
+          <div style={styles.filterBar}>
+            <div style={styles.filterChips}>
+              {['all', ...Object.keys(ENTRY_TYPES)].map(t => (
+                <button key={t} onClick={() => setFilterType(t)} style={{ ...styles.filterChip, ...(filterType === t ? styles.filterChipActive : {}) }}>
+                  {t === 'all' ? 'All' : ENTRY_TYPES[t].label}
+                </button>
+              ))}
+            </div>
+            <input type="text" placeholder="Filter by tag…" value={filterTag} onChange={(e) => setFilterTag(e.target.value)} style={styles.filterInput} />
+          </div>
+          {filtered.length === 0 ? <EmptyState text="No entries match your filters." /> : (
+            <div style={styles.feed}>
+              {filtered.map(e => (
+                <EntryCard key={e.id} entry={e} thesis={data.theses.find(t => t.id === e.thesisId)} onDelete={() => { if (confirm('Delete entry?')) deleteEntry(e.id); }} onOpenThesis={onOpenThesis} />
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function EntryCard({ entry, thesis, onDelete, onOpenThesis }) {
+      const type = ENTRY_TYPES[entry.type] || ENTRY_TYPES.note;
+      return (
+        <article style={styles.entryCard}>
+          <div style={styles.entryHeader}>
+            <div style={styles.entryHeaderLeft}>
+              <span style={{ ...styles.entryTypeChip, color: type.color, borderColor: type.color }}>{type.icon} {type.label}</span>
+              {thesis && <button style={styles.entryThesisLink} onClick={() => onOpenThesis(thesis.id)}><I.Target size={11} /> {thesis.ticker || thesis.name}</button>}
+              <span style={styles.entryDate}>{fmtDateTime(entry.createdAt)}</span>
+            </div>
+            <button style={styles.iconBtn} onClick={onDelete} title="Delete"><I.Trash size={13} /></button>
+          </div>
+          {entry.title && <h3 style={styles.entryTitle}>{entry.title}</h3>}
+          <div style={styles.entryBody}>{entry.body}</div>
+          {(entry.biases?.length > 0 || entry.errors?.length > 0 || entry.tags?.length > 0) && (
+            <div style={styles.entryTags}>
+              {entry.biases?.map(b => <span key={b} style={{ ...styles.tagPill, ...styles.tagBias }}>⚠ {b}</span>)}
+              {entry.errors?.map(er => <span key={er} style={{ ...styles.tagPill, ...styles.tagError }}>✕ {er}</span>)}
+              {entry.tags?.map(t => <span key={t} style={{ ...styles.tagPill, ...styles.tagNeutral }}># {t}</span>)}
+            </div>
+          )}
+        </article>
+      );
+    }
+
+    function ThesesList({ theses, entries, onOpen, openComposer }) {
+      const [filter, setFilter] = useState('active');
+      const filtered = theses.filter(t => filter === 'all' || t.status === filter);
+      return (
+        <div>
+          <header style={styles.pageHeader}>
+            <div>
+              <h1 className="page-title" style={styles.pageTitle}>Theses</h1>
+              <p style={styles.pageSub}>Locked hypotheses with update history</p>
+            </div>
+            <button style={styles.primaryBtn} onClick={() => openComposer('thesis')}><I.Plus size={14} /> New Thesis</button>
+          </header>
+          <div style={styles.filterBar}>
+            <div style={styles.filterChips}>
+              {['active', 'closed', 'invalidated', 'all'].map(f => (
+                <button key={f} onClick={() => setFilter(f)} style={{ ...styles.filterChip, ...(filter === f ? styles.filterChipActive : {}) }}>
+                  {f[0].toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {filtered.length === 0 ? (
+            <EmptyState text={`No ${filter === 'all' ? '' : filter} theses yet.`} cta="Create your first" onClick={() => openComposer('thesis')} />
+          ) : (
+            <div style={styles.thesisGrid}>
+              {filtered.map(t => {
+                const linkedEntries = entries.filter(e => e.thesisId === t.id);
+                const updates = linkedEntries.filter(e => e.type === 'update').length;
+                return (
+                  <div key={t.id} style={styles.thesisGridCard} onClick={() => onOpen(t.id)}>
+                    <div style={styles.thesisGridHead}>
+                      <div style={styles.thesisGridTicker}>{t.ticker || t.name}</div>
+                      <StatusBadge status={t.status} outcome={t.outcome} />
+                    </div>
+                    <div style={styles.thesisGridStatement}>
+                      {t.thesisStatement?.slice(0, 180)}{t.thesisStatement?.length > 180 ? '…' : ''}
+                    </div>
+                    <div style={styles.thesisGridFooter}>
+                      <span>{daysSince(t.createdAt)}d old</span>
+                      <span>·</span>
+                      <span>{updates} update{updates !== 1 ? 's' : ''}</span>
+                      {t.entryPrice && <><span>·</span><span style={styles.mono}>@ {t.entryPrice}</span></>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function StatusBadge({ status, outcome }) {
+      const map = {
+        active: { label: 'Active', color: '#2d4a3e', bg: '#e8efe8' },
+        closed: { label: outcome === 'win' ? 'Win' : outcome === 'loss' ? 'Loss' : 'Closed', color: outcome === 'win' ? '#2d4a3e' : outcome === 'loss' ? '#7a2f2f' : '#555', bg: '#f4f0e7' },
+        invalidated: { label: 'Invalidated', color: '#7a2f2f', bg: '#f5e8e8' }
+      };
+      const s = map[status] || map.active;
+      return <span style={{ ...styles.statusBadge, color: s.color, background: s.bg }}>{s.label}</span>;
+    }
+
+    function ThesisDetail({ thesis, entries, onBack, onAddUpdate, onAddPostmortem, onClose, onDelete, deleteEntry }) {
+      const [closeModal, setCloseModal] = useState(false);
+      if (!thesis) return null;
+      const chronological = [...entries].sort((a, b) => a.createdAt - b.createdAt);
+      return (
+        <div>
+          <button style={styles.backBtn} onClick={onBack}>← Back to theses</button>
+          <header style={styles.thesisDetailHead}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={styles.thesisDetailMeta}>
+                <StatusBadge status={thesis.status} outcome={thesis.outcome} />
+                <span style={styles.mono}>{daysSince(thesis.createdAt)}d · opened {fmtDate(thesis.createdAt)}</span>
+              </div>
+              <h1 className="thesis-detail-title" style={styles.thesisDetailTitle}>
+                {thesis.ticker && <span style={styles.thesisDetailTicker}>{thesis.ticker}</span>}
+                {thesis.name || thesis.ticker}
+              </h1>
+            </div>
+            <div style={styles.thesisDetailActions}>
+              {thesis.status === 'active' && (
+                <>
+                  <button style={styles.secondaryBtn} onClick={() => onAddUpdate(thesis.id)}><I.Plus size={13} /> Update</button>
+                  <button style={styles.secondaryBtn} onClick={() => setCloseModal(true)}>Close Position</button>
+                </>
+              )}
+              {thesis.status !== 'active' && !entries.some(e => e.type === 'postmortem') && (
+                <button style={styles.secondaryBtn} onClick={() => onAddPostmortem(thesis.id)}><I.Plus size={13} /> Post-mortem</button>
+              )}
+              <button style={styles.dangerBtn} onClick={() => onDelete(thesis.id)}><I.Trash size={13} /></button>
+            </div>
+          </header>
+          <section style={styles.lockedBox}>
+            <div style={styles.lockedHeader}>
+              <I.Lock size={12} />
+              <span>LOCKED · Original Thesis</span>
+              <span style={styles.lockedSub}>Written {fmtDate(thesis.createdAt)} · Read before every update</span>
+            </div>
+            <div style={styles.lockedBody}>{thesis.thesisStatement}</div>
+            <div style={styles.lockedGrid}>
+              {thesis.invalidationCriteria && <div><div style={styles.lockedLabel}>Invalidation</div><div style={styles.lockedText}>{thesis.invalidationCriteria}</div></div>}
+              {thesis.catalysts && <div><div style={styles.lockedLabel}>Catalysts</div><div style={styles.lockedText}>{thesis.catalysts}</div></div>}
+              {thesis.risks && <div><div style={styles.lockedLabel}>Risks</div><div style={styles.lockedText}>{thesis.risks}</div></div>}
+            </div>
+            <div style={styles.lockedMetrics}>
+              {thesis.entryPrice && <div><span style={styles.lockedMetricLabel}>Entry:</span> <span style={styles.mono}>{thesis.entryPrice}</span></div>}
+              {thesis.targetPrice && <div><span style={styles.lockedMetricLabel}>Target:</span> <span style={styles.mono}>{thesis.targetPrice}</span></div>}
+              {thesis.stopLoss && <div><span style={styles.lockedMetricLabel}>Stop:</span> <span style={styles.mono}>{thesis.stopLoss}</span></div>}
+              {thesis.positionSize && <div><span style={styles.lockedMetricLabel}>Size:</span> <span style={styles.mono}>{thesis.positionSize}</span></div>}
+              {thesis.timeHorizon && <div><span style={styles.lockedMetricLabel}>Horizon:</span> {thesis.timeHorizon}</div>}
+              {thesis.convictionLevel && <div><span style={styles.lockedMetricLabel}>Conviction:</span> {thesis.convictionLevel}/10</div>}
+            </div>
+          </section>
+          {thesis.status !== 'active' && thesis.outcomeNotes && (
+            <section style={styles.outcomeBox}>
+              <div style={styles.outcomeHeader}>
+                {thesis.outcome === 'win' ? <I.ArrowUpRight size={14} /> : thesis.outcome === 'loss' ? <I.ArrowDownRight size={14} /> : <I.Minus size={14} />}
+                OUTCOME · {(thesis.outcome || 'closed').toUpperCase()}
+                {thesis.exitPrice && <span style={styles.mono}>Exit @ {thesis.exitPrice}</span>}
+                {thesis.pnl && <span style={styles.mono}>P&L: {thesis.pnl}</span>}
+              </div>
+              <div style={styles.outcomeBody}>{thesis.outcomeNotes}</div>
+            </section>
+          )}
+          <h2 style={styles.subheading}>Timeline · {chronological.length} entries</h2>
+          {chronological.length === 0 ? (
+            <EmptyState text="No updates yet." />
+          ) : (
+            <div style={styles.timeline}>
+              {chronological.map(e => <EntryCard key={e.id} entry={e} thesis={null} onDelete={() => { if (confirm('Delete entry?')) deleteEntry(e.id); }} onOpenThesis={() => {}} />)}
+            </div>
+          )}
+          {closeModal && <CloseThesisModal thesis={thesis} onSubmit={(patch) => { onClose(thesis.id, patch); setCloseModal(false); }} onCancel={() => setCloseModal(false)} />}
+        </div>
+      );
+    }
+
+    function CloseThesisModal({ thesis, onSubmit, onCancel }) {
+      const [outcome, setOutcome] = useState('win');
+      const [exitPrice, setExitPrice] = useState('');
+      const [pnl, setPnl] = useState('');
+      const [notes, setNotes] = useState('');
+      const [invalidated, setInvalidated] = useState(false);
+      return (
+        <div className="modal-overlay" style={styles.modalOverlay} onClick={onCancel}>
+          <div className="modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>Close {thesis.ticker || thesis.name}</h2>
+              <button style={styles.iconBtn} onClick={onCancel}><I.X size={16} /></button>
+            </div>
+            <div style={styles.modalBody}>
+              <Field label="Outcome">
+                <div style={styles.radioRow}>
+                  {['win', 'loss', 'breakeven'].map(o => (
+                    <button key={o} onClick={() => setOutcome(o)} style={{ ...styles.radioBtn, ...(outcome === o ? styles.radioBtnActive : {}) }}>
+                      {o[0].toUpperCase() + o.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <div className="field-row" style={styles.fieldRow}>
+                <Field label="Exit Price"><input type="text" value={exitPrice} onChange={(e) => setExitPrice(e.target.value)} style={styles.input} /></Field>
+                <Field label="P&L"><input type="text" value={pnl} onChange={(e) => setPnl(e.target.value)} style={styles.input} placeholder="+15% or -$2,400" /></Field>
+              </div>
+              <Field label="Closing notes">
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 120 }} placeholder="Did the thesis play out? What surprised you? What would you do differently?" />
+              </Field>
+              <label style={styles.checkRow}>
+                <input type="checkbox" checked={invalidated} onChange={(e) => setInvalidated(e.target.checked)} />
+                <span>Mark as <strong>invalidated</strong> (thesis was wrong, not just the trade)</span>
+              </label>
+            </div>
+            <div style={styles.modalFooter}>
+              <button style={styles.secondaryBtn} onClick={onCancel}>Cancel</button>
+              <button style={styles.primaryBtn} onClick={() => onSubmit({ status: invalidated ? 'invalidated' : 'closed', outcome, exitPrice, pnl, outcomeNotes: notes, closedAt: Date.now() })}>Close Thesis</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function RulesView({ data, addRule, deleteRule }) {
+      const [newRule, setNewRule] = useState('');
+      const [newSource, setNewSource] = useState('');
+      const biasCounts = {}, errorCounts = {};
+      data.entries.forEach(e => {
+        (e.biases || []).forEach(b => { biasCounts[b] = (biasCounts[b] || 0) + 1; });
+        (e.errors || []).forEach(err => { errorCounts[err] = (errorCounts[err] || 0) + 1; });
+      });
+      const candidateBiases = Object.entries(biasCounts).filter(([_, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+      const candidateErrors = Object.entries(errorCounts).filter(([_, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+      return (
+        <div>
+          <header style={styles.pageHeader}>
+            <div>
+              <h1 className="page-title" style={styles.pageTitle}>Rules & Lessons</h1>
+              <p style={styles.pageSub}>Patterns become principles.</p>
+            </div>
+          </header>
+          <section style={styles.ruleComposer}>
+            <div style={styles.sectionTitle}>✎ Add a Trading Rule</div>
+            <textarea value={newRule} onChange={(e) => setNewRule(e.target.value)} placeholder="e.g., Never size above 4% on a thesis with fewer than three independent sources of confirmation." style={{ ...styles.input, ...styles.textarea, minHeight: 80, marginTop: 10 }} />
+            <input type="text" value={newSource} onChange={(e) => setNewSource(e.target.value)} placeholder="Derived from: ticker, mistake, or pattern (optional)" style={{ ...styles.input, marginTop: 8 }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <button style={styles.primaryBtn} onClick={() => { if (newRule.trim()) { addRule(newRule.trim(), newSource.trim()); setNewRule(''); setNewSource(''); } }}>
+                <I.Plus size={13} /> Add Rule
+              </button>
+            </div>
+          </section>
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>Your Rules · {data.rules.length}</h2>
+            {data.rules.length === 0 ? <EmptyState text="No rules yet. Draw them from the patterns below." /> : (
+              <div style={styles.rulesList}>
+                {data.rules.map((r, i) => (
+                  <div key={r.id} style={styles.ruleCard}>
+                    <div style={styles.ruleNumber}>§{String(i + 1).padStart(2, '0')}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={styles.ruleText}>{r.text}</div>
+                      {r.source && <div style={styles.ruleSource}>Source: {r.source}</div>}
+                      <div style={styles.ruleDate}>{fmtDate(r.createdAt)}</div>
+                    </div>
+                    <button style={styles.iconBtn} onClick={() => { if (confirm('Delete rule?')) deleteRule(r.id); }}><I.Trash size={13} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          <div className="two-col" style={styles.twoCol}>
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>⚠ Recurring Biases</h2>
+              <p style={styles.sectionSub}>Tagged 2+ times — candidates for a rule</p>
+              {candidateBiases.length === 0 ? <EmptyState text="No recurring biases yet." /> : (
+                <div style={styles.candidateList}>
+                  {candidateBiases.map(([name, count]) => <div key={name} style={styles.candidate}><span>{name}</span><span style={styles.freqCount}>×{count}</span></div>)}
+                </div>
+              )}
+            </section>
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>✕ Recurring Errors</h2>
+              <p style={styles.sectionSub}>Each repeat is tuition.</p>
+              {candidateErrors.length === 0 ? <EmptyState text="No recurring errors yet." /> : (
+                <div style={styles.candidateList}>
+                  {candidateErrors.map(([name, count]) => <div key={name} style={styles.candidate}><span>{name}</span><span style={styles.freqCount}>×{count}</span></div>)}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      );
+    }
+
+    function SearchView({ query, data, onOpenThesis }) {
+      const q = query.toLowerCase();
+      const matchingEntries = data.entries.filter(e => [e.title, e.body, ...(e.biases || []), ...(e.errors || []), ...(e.tags || [])].join(' ').toLowerCase().includes(q));
+      const matchingTheses = data.theses.filter(t => [t.ticker, t.name, t.thesisStatement, t.invalidationCriteria, t.catalysts, t.risks, t.outcomeNotes].join(' ').toLowerCase().includes(q));
+      const matchingRules = data.rules.filter(r => (r.text + ' ' + (r.source || '')).toLowerCase().includes(q));
+      const total = matchingEntries.length + matchingTheses.length + matchingRules.length;
+      return (
+        <div>
+          <header style={styles.pageHeader}>
+            <div>
+              <h1 className="page-title" style={styles.pageTitle}>Search</h1>
+              <p style={styles.pageSub}>"{query}" · {total} result{total !== 1 ? 's' : ''}</p>
+            </div>
+          </header>
+          {matchingTheses.length > 0 && (
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>Theses · {matchingTheses.length}</h2>
+              <div style={styles.thesisGrid}>
+                {matchingTheses.map(t => (
+                  <div key={t.id} style={styles.thesisGridCard} onClick={() => onOpenThesis(t.id)}>
+                    <div style={styles.thesisGridHead}>
+                      <div style={styles.thesisGridTicker}>{t.ticker || t.name}</div>
+                      <StatusBadge status={t.status} outcome={t.outcome} />
+                    </div>
+                    <div style={styles.thesisGridStatement}><Highlight text={t.thesisStatement} q={q} /></div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {matchingEntries.length > 0 && (
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>Entries · {matchingEntries.length}</h2>
+              <div style={styles.feed}>
+                {matchingEntries.map(e => (
+                  <div key={e.id} style={styles.entryCard}>
+                    <div style={styles.entryHeader}>
+                      <div style={styles.entryHeaderLeft}>
+                        <span style={{ ...styles.entryTypeChip, color: ENTRY_TYPES[e.type]?.color, borderColor: ENTRY_TYPES[e.type]?.color }}>{ENTRY_TYPES[e.type]?.icon} {ENTRY_TYPES[e.type]?.label}</span>
+                        <span style={styles.entryDate}>{fmtDate(e.createdAt)}</span>
+                      </div>
+                    </div>
+                    {e.title && <h3 style={styles.entryTitle}><Highlight text={e.title} q={q} /></h3>}
+                    <div style={styles.entryBody}><Highlight text={e.body} q={q} /></div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {matchingRules.length > 0 && (
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>Rules · {matchingRules.length}</h2>
+              <div style={styles.rulesList}>
+                {matchingRules.map((r, i) => (
+                  <div key={r.id} style={styles.ruleCard}>
+                    <div style={styles.ruleNumber}>§{String(i + 1).padStart(2, '0')}</div>
+                    <div style={{ flex: 1 }}><div style={styles.ruleText}><Highlight text={r.text} q={q} /></div></div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {total === 0 && <EmptyState text="No matches. Try a shorter query." />}
+        </div>
+      );
+    }
+
+    function Highlight({ text, q }) {
+      if (!text) return null;
+      if (!q) return text;
+      const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')})`, 'gi'));
+      return parts.map((p, i) => p.toLowerCase() === q.toLowerCase()
+        ? <mark key={i} style={{ background: '#f3e3a8', padding: '0 2px' }}>{p}</mark>
+        : <span key={i}>{p}</span>);
+    }
+
+    function Composer({ mode, thesisId, theses, allBiases, allErrors, onClose, onSubmitEntry, onSubmitThesis, onAddCustomTag }) {
+      const [type, setType] = useState(mode === 'thesis' ? null : mode);
+      const [title, setTitle] = useState('');
+      const [body, setBody] = useState('');
+      const [linkedThesis, setLinkedThesis] = useState(thesisId || '');
+      const [biases, setBiases] = useState([]);
+      const [errors, setErrors] = useState([]);
+      const [tags, setTags] = useState([]);
+      const [tagInput, setTagInput] = useState('');
+      const [ticker, setTicker] = useState('');
+      const [name, setName] = useState('');
+      const [thesisStatement, setThesisStatement] = useState('');
+      const [invalidationCriteria, setInvalidationCriteria] = useState('');
+      const [catalysts, setCatalysts] = useState('');
+      const [risks, setRisks] = useState('');
+      const [entryPrice, setEntryPrice] = useState('');
+      const [targetPrice, setTargetPrice] = useState('');
+      const [stopLoss, setStopLoss] = useState('');
+      const [positionSize, setPositionSize] = useState('');
+      const [timeHorizon, setTimeHorizon] = useState('');
+      const [convictionLevel, setConvictionLevel] = useState(5);
+      const [showBiasCustom, setShowBiasCustom] = useState(false);
+      const [showErrorCustom, setShowErrorCustom] = useState(false);
+      const [customBiasInput, setCustomBiasInput] = useState('');
+      const [customErrorInput, setCustomErrorInput] = useState('');
+      const isThesis = mode === 'thesis';
+      const toggleTag = (list, setList, val) => setList(list.includes(val) ? list.filter(x => x !== val) : [...list, val]);
+      const addTagFromInput = () => {
+        const v = tagInput.trim();
+        if (v && !tags.includes(v)) { setTags([...tags, v]); setTagInput(''); }
+      };
+      const handleSubmit = () => {
+        if (isThesis) {
+          if (!thesisStatement.trim()) { alert('Thesis statement is required.'); return; }
+          onSubmitThesis({ ticker: ticker.trim().toUpperCase(), name: name.trim() || ticker.trim().toUpperCase(), thesisStatement: thesisStatement.trim(), invalidationCriteria: invalidationCriteria.trim(), catalysts: catalysts.trim(), risks: risks.trim(), entryPrice: entryPrice.trim(), targetPrice: targetPrice.trim(), stopLoss: stopLoss.trim(), positionSize: positionSize.trim(), timeHorizon: timeHorizon.trim(), convictionLevel });
+        } else {
+          if (!body.trim()) { alert('Write something.'); return; }
+          onSubmitEntry({ type, title: title.trim(), body: body.trim(), thesisId: linkedThesis || null, biases, errors, tags });
+        }
+      };
+      const linkedThesisObj = theses.find(t => t.id === linkedThesis);
+      return (
+        <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+          <div className="modal" style={{ ...styles.modal, maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>{isThesis ? '◈ New Thesis' : `${ENTRY_TYPES[type]?.icon || '·'} New ${ENTRY_TYPES[type]?.label || 'Entry'}`}</h2>
+              <button style={styles.iconBtn} onClick={onClose}><I.X size={16} /></button>
+            </div>
+            <div style={styles.modalBody}>
+              {!isThesis && (
+                <Field label="Entry Type">
+                  <div style={styles.radioRow}>
+                    {Object.entries(ENTRY_TYPES).map(([k, v]) => (
+                      <button key={k} onClick={() => setType(k)} style={{ ...styles.radioBtn, ...(type === k ? styles.radioBtnActive : {}) }}>{v.icon} {v.label}</button>
+                    ))}
+                  </div>
+                </Field>
+              )}
+              {isThesis ? (
+                <>
+                  <div className="field-row" style={styles.fieldRow}>
+                    <Field label="Ticker"><input type="text" value={ticker} onChange={(e) => setTicker(e.target.value)} style={styles.input} placeholder="AAPL" /></Field>
+                    <Field label="Name (optional)"><input type="text" value={name} onChange={(e) => setName(e.target.value)} style={styles.input} placeholder="Apple Inc." /></Field>
+                  </div>
+                  <Field label="Thesis Statement *" hint="The core bet. You'll be held to this exact wording.">
+                    <textarea value={thesisStatement} onChange={(e) => setThesisStatement(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 120 }} placeholder="What do you believe, why is the market wrong, and what specifically do you expect to happen?" autoFocus />
+                  </Field>
+                  <Field label="Invalidation Criteria" hint="What would prove this wrong? Be specific.">
+                    <textarea value={invalidationCriteria} onChange={(e) => setInvalidationCriteria(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 80 }} placeholder="e.g., Gross margin falls below 38% for two consecutive quarters." />
+                  </Field>
+                  <div className="field-row" style={styles.fieldRow}>
+                    <Field label="Catalysts"><textarea value={catalysts} onChange={(e) => setCatalysts(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 60 }} /></Field>
+                    <Field label="Key Risks"><textarea value={risks} onChange={(e) => setRisks(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 60 }} /></Field>
+                  </div>
+                  <div className="field-row" style={styles.fieldRow}>
+                    <Field label="Entry Price"><input type="text" value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} style={styles.input} /></Field>
+                    <Field label="Target"><input type="text" value={targetPrice} onChange={(e) => setTargetPrice(e.target.value)} style={styles.input} /></Field>
+                    <Field label="Stop"><input type="text" value={stopLoss} onChange={(e) => setStopLoss(e.target.value)} style={styles.input} /></Field>
+                  </div>
+                  <div className="field-row" style={styles.fieldRow}>
+                    <Field label="Position Size"><input type="text" value={positionSize} onChange={(e) => setPositionSize(e.target.value)} style={styles.input} placeholder="3% of book" /></Field>
+                    <Field label="Time Horizon"><input type="text" value={timeHorizon} onChange={(e) => setTimeHorizon(e.target.value)} style={styles.input} placeholder="12-18 months" /></Field>
+                  </div>
+                  <Field label={`Conviction: ${convictionLevel}/10`} hint="You'll compare this against the eventual outcome.">
+                    <input type="range" min="1" max="10" value={convictionLevel} onChange={(e) => setConvictionLevel(parseInt(e.target.value))} style={{ width: '100%' }} />
+                  </Field>
+                  <div style={styles.lockNotice}>
+                    <I.Lock size={12} /> Once saved, the thesis statement, invalidation criteria, catalysts, and risks are locked.
+                  </div>
+                </>
+              ) : (
+                <>
+                  {theses.length > 0 && (
+                    <Field label="Link to Thesis (optional)">
+                      <select value={linkedThesis} onChange={(e) => setLinkedThesis(e.target.value)} style={styles.input}>
+                        <option value="">— No linked thesis —</option>
+                        {theses.map(t => <option key={t.id} value={t.id}>{t.ticker || t.name} · {t.status}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  {linkedThesisObj && (type === 'update' || type === 'postmortem') && (
+                    <div style={styles.creepWarning}>
+                      <div style={styles.creepWarningHead}><I.Lock size={11} /> Re-read your original thesis before writing</div>
+                      <div style={styles.creepWarningBody}>{linkedThesisObj.thesisStatement}</div>
+                      {linkedThesisObj.invalidationCriteria && <div style={styles.creepWarningInv}><strong>Invalidation:</strong> {linkedThesisObj.invalidationCriteria}</div>}
+                    </div>
+                  )}
+                  <Field label="Title (optional)"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={styles.input} placeholder="One-line summary" /></Field>
+                  <Field label="Body *" hint="Write freely. No format required.">
+                    <textarea value={body} onChange={(e) => setBody(e.target.value)} style={{ ...styles.input, ...styles.textarea, minHeight: 180 }} placeholder={type === 'idea' ? "What caught your eye? What's the hunch?" : type === 'update' ? "What changed? Did new info confirm or threaten the thesis?" : type === 'postmortem' ? "What happened? Was the thesis right, wrong, or irrelevant? What did you learn?" : "Log your thinking…"} autoFocus />
+                  </Field>
+                  <Field label="⚠ Biases">
+                    <div style={styles.chipGrid}>
+                      {allBiases.map(b => (
+                        <button key={b} onClick={() => toggleTag(biases, setBiases, b)} style={{ ...styles.chip, ...(biases.includes(b) ? styles.chipActiveBias : {}) }}>{b}</button>
+                      ))}
+                      <button style={styles.chipAdd} onClick={() => setShowBiasCustom(!showBiasCustom)}><I.Plus size={11} /> Custom</button>
+                    </div>
+                    {showBiasCustom && (
+                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                        <input type="text" value={customBiasInput} onChange={(e) => setCustomBiasInput(e.target.value)} placeholder="New bias name" style={{ ...styles.input, flex: 1 }} />
+                        <button style={styles.secondaryBtn} onClick={() => { const v = customBiasInput.trim(); if (v) { onAddCustomTag('bias', v); setBiases([...biases, v]); setCustomBiasInput(''); setShowBiasCustom(false); } }}>Add</button>
+                      </div>
+                    )}
+                  </Field>
+                  <Field label="✕ Errors">
+                    <div style={styles.chipGrid}>
+                      {allErrors.map(er => (
+                        <button key={er} onClick={() => toggleTag(errors, setErrors, er)} style={{ ...styles.chip, ...(errors.includes(er) ? styles.chipActiveError : {}) }}>{er}</button>
+                      ))}
+                      <button style={styles.chipAdd} onClick={() => setShowErrorCustom(!showErrorCustom)}><I.Plus size={11} /> Custom</button>
+                    </div>
+                    {showErrorCustom && (
+                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                        <input type="text" value={customErrorInput} onChange={(e) => setCustomErrorInput(e.target.value)} placeholder="New error name" style={{ ...styles.input, flex: 1 }} />
+                        <button style={styles.secondaryBtn} onClick={() => { const v = customErrorInput.trim(); if (v) { onAddCustomTag('error', v); setErrors([...errors, v]); setCustomErrorInput(''); setShowErrorCustom(false); } }}>Add</button>
+                      </div>
+                    )}
+                  </Field>
+                  <Field label="# Custom Tags">
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input type="text" value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTagFromInput(); } }} placeholder="sector, macro-theme, etc." style={{ ...styles.input, flex: 1 }} />
+                      <button style={styles.secondaryBtn} onClick={addTagFromInput}>Add</button>
+                    </div>
+                    {tags.length > 0 && (
+                      <div style={{ ...styles.chipGrid, marginTop: 8 }}>
+                        {tags.map(t => <span key={t} style={{ ...styles.tagPill, ...styles.tagNeutral, cursor: 'pointer' }} onClick={() => setTags(tags.filter(x => x !== t))}># {t} ×</span>)}
+                      </div>
+                    )}
+                  </Field>
+                </>
+              )}
+            </div>
+            <div style={styles.modalFooter}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={styles.secondaryBtn} onClick={onClose}>Cancel</button>
+                <button style={styles.primaryBtn} onClick={handleSubmit}>{isThesis ? 'Lock Thesis' : 'Save Entry'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Field({ label, hint, children }) {
+      return (
+        <div style={styles.field}>
+          <label style={styles.fieldLabel}>{label}</label>
+          {hint && <div style={styles.fieldHint}>{hint}</div>}
+          {children}
+        </div>
+      );
+    }
+
+    // ===== Styles =====
+    const styles = {
+      app: { display: 'flex', minHeight: '100vh', background: '#f4f0e7' },
+      sidebar: { width: 260, background: '#ebe5d3', borderRight: '1px solid #d9d2c3', padding: '24px 20px', display: 'flex', flexDirection: 'column', gap: 20, position: 'sticky', top: 0, height: '100vh', overflowY: 'auto' },
+      brand: { display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 16, borderBottom: '1px solid #d9d2c3' },
+      brandMark: { width: 36, height: 36, background: '#2a2620', color: '#f4f0e7', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontFamily: 'Fraunces, serif' },
+      brandTitle: { fontFamily: 'Fraunces, serif', fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.1 },
+      brandSub: { fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#8a7e69', marginTop: 2 },
+      primaryBtn: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: '#2a2620', color: '#f4f0e7', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 500, justifyContent: 'center' },
+      fileBar: { display: 'flex', gap: 6 },
+      saveBtn: { flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 10px', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+      saveBtnClean: { background: '#2d4a3e', color: '#f4f0e7' },
+      saveBtnDirty: { background: '#a04040', color: '#fff', animation: 'pulse 2s ease-in-out infinite' },
+      openBtn: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 12px', background: 'transparent', color: '#2a2620', border: '1px solid #c9bfa9', borderRadius: 3, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
+      fileMeta: { padding: '8px 10px', background: 'rgba(255,255,255,0.4)', border: '1px solid #d9d2c3', borderRadius: 3, fontSize: 11 },
+      fileMetaName: { fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#3a342a', marginBottom: 4, wordBreak: 'break-all' },
+      fileMetaStatus: { fontSize: 10, color: '#5a5040', fontStyle: 'italic' },
+      topSaveBtn: { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', background: '#a04040', color: '#fff', border: 'none', borderRadius: 3, fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+      savedIndicator: { fontSize: 11, color: '#2d4a3e', fontWeight: 500 },
+
+      // Welcome screen
+      welcomeWrap: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'linear-gradient(135deg, #f4f0e7 0%, #ebe5d3 100%)' },
+      welcomeCard: { maxWidth: 520, width: '100%', background: '#fdfbf5', border: '1px solid #d9d2c3', borderRadius: 6, padding: '44px 40px', boxShadow: '0 24px 60px rgba(42,38,32,0.12)' },
+      welcomeMark: { width: 56, height: 56, background: '#2a2620', color: '#f4f0e7', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontFamily: 'Fraunces, serif', marginBottom: 16 },
+      welcomeTitle: { fontFamily: 'Fraunces, serif', fontSize: 38, fontWeight: 500, margin: 0, letterSpacing: '-0.02em' },
+      welcomeSub: { fontFamily: 'Fraunces, serif', fontSize: 16, color: '#5a5040', fontStyle: 'italic', margin: '4px 0 24px' },
+      welcomeWarn: { padding: '10px 14px', background: '#f5e4e4', border: '1px solid #e0bfbf', borderRadius: 4, fontSize: 13, color: '#7a2f2f', marginBottom: 16 },
+      welcomeCache: { padding: '10px 14px', background: '#fdf4ea', border: '1px solid #e8d6b8', borderRadius: 4, fontSize: 13, color: '#7c5e3c', marginBottom: 16 },
+      welcomeSteps: { fontFamily: 'Fraunces, serif', fontSize: 14, lineHeight: 1.6, color: '#3a342a', marginBottom: 20 },
+      welcomeList: { paddingLeft: 20, margin: '8px 0 0' },
+      welcomeBtnPrimary: { display: 'block', width: '100%', padding: '14px 20px', background: '#2a2620', color: '#f4f0e7', border: 'none', borderRadius: 4, fontSize: 15, fontWeight: 600, cursor: 'pointer', marginTop: 12 },
+      welcomeBtnSecondary: { display: 'block', width: '100%', padding: '12px 20px', background: 'transparent', color: '#2a2620', border: '1px solid #c9bfa9', borderRadius: 4, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
+      welcomeDivider: { textAlign: 'center', fontSize: 11, color: '#8a7e69', fontStyle: 'italic', fontFamily: 'Fraunces, serif', margin: '14px 0 10px', letterSpacing: '0.1em' },
+      welcomeFoot: { fontSize: 12, color: '#8a7e69', textAlign: 'center', marginTop: 20, fontStyle: 'italic', fontFamily: 'Fraunces, serif', lineHeight: 1.5 },
+
+      // Status panel (sidebar)
+      statusPanel: { padding: '12px 12px', background: 'rgba(255,255,255,0.5)', border: '1px solid #d9d2c3', borderRadius: 4 },
+      statusRow: { display: 'flex', alignItems: 'center', gap: 8 },
+      statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
+      statusText: { fontSize: 12, fontWeight: 600 },
+      statusFile: { fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#5a5040', marginTop: 6, wordBreak: 'break-all', lineHeight: 1.3 },
+      statusTime: { fontSize: 10, color: '#8a7e69', fontStyle: 'italic', marginTop: 3 },
+
+      // Reconnect banner
+      reconnectBanner: { display: 'flex', alignItems: 'center', gap: 16, padding: '12px 24px', background: '#fdf4ea', borderBottom: '1px solid #e8d6b8', color: '#7c5e3c' },
+      reconnectBtn: { padding: '8px 18px', background: '#7c5e3c', color: '#f4f0e7', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+      secondaryBtn: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'transparent', color: '#2a2620', border: '1px solid #c9bfa9', borderRadius: 3, fontSize: 13, fontWeight: 500 },
+      dangerBtn: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 10px', background: 'transparent', color: '#7a2f2f', border: '1px solid #d9bfbf', borderRadius: 3, fontSize: 13 },
+      ghostBtn: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'transparent', color: '#5a5040', border: 'none', borderRadius: 3, fontSize: 12, textAlign: 'left', width: '100%' },
+      linkBtn: { background: 'transparent', border: 'none', color: '#5a5040', fontSize: 12, padding: 0 },
+      iconBtn: { background: 'transparent', border: 'none', padding: 6, color: '#8a7e69', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+      nav: { display: 'flex', flexDirection: 'column', gap: 2 },
+      navItem: { display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', background: 'transparent', color: '#3a342a', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 500, width: '100%' },
+      navItemActive: { background: '#2a2620', color: '#f4f0e7' },
+      navCount: { fontSize: 11, fontFamily: 'JetBrains Mono, monospace', padding: '1px 6px', background: 'rgba(42,38,32,0.08)', borderRadius: 2, color: '#5a5040' },
+      sidebarFooter: { marginTop: 'auto', paddingTop: 16, borderTop: '1px solid #d9d2c3', display: 'flex', flexDirection: 'column', gap: 2 },
+      sidebarLabel: { fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#8a7e69', marginBottom: 8, paddingLeft: 10 },
+      main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
+      topBar: { display: 'flex', alignItems: 'center', gap: 16, padding: '16px 32px', background: 'rgba(244,240,231,0.95)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #e3dbc8', position: 'sticky', top: 0, zIndex: 10 },
+      searchWrap: { flex: 1, maxWidth: 500, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#fff', border: '1px solid #d9d2c3', borderRadius: 3, color: '#8a7e69' },
+      searchInput: { flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, color: '#2a2620' },
+      searchClear: { background: 'transparent', border: 'none', padding: 2, color: '#8a7e69', display: 'flex' },
+      topBarRight: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 },
+      dateLabel: { fontSize: 12, color: '#8a7e69', fontStyle: 'italic', fontFamily: 'Fraunces, serif' },
+      content: { padding: '32px 40px 64px', maxWidth: 1200, width: '100%', margin: '0 auto' },
+      pageHeader: { display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 28, paddingBottom: 20, borderBottom: '1px solid #e3dbc8', flexWrap: 'wrap', gap: 16 },
+      pageTitle: { fontFamily: 'Fraunces, serif', fontSize: 42, fontWeight: 500, margin: 0, letterSpacing: '-0.02em', lineHeight: 1.05 },
+      pageSub: { margin: '6px 0 0', fontSize: 13, color: '#8a7e69', fontStyle: 'italic', fontFamily: 'Fraunces, serif' },
+      subheading: { fontFamily: 'Fraunces, serif', fontSize: 22, fontWeight: 500, margin: '36px 0 16px', paddingBottom: 8, borderBottom: '1px solid #e3dbc8' },
+      dashboard: { display: 'flex', flexDirection: 'column', gap: 28 },
+      statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 },
+      statCard: { padding: '18px 20px', background: '#fff', border: '1px solid #e3dbc8', borderLeftWidth: 3, borderRadius: 3 },
+      statLabel: { fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#8a7e69', marginBottom: 8 },
+      statValue: { fontFamily: 'Fraunces, serif', fontSize: 32, fontWeight: 500, color: '#2a2620', lineHeight: 1 },
+      section: { background: '#fff', border: '1px solid #e3dbc8', borderRadius: 3, padding: '22px 24px' },
+      sectionHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' },
+      sectionTitle: { fontFamily: 'Fraunces, serif', fontSize: 18, fontWeight: 500, margin: 0, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 6 },
+      sectionSub: { fontSize: 11, color: '#8a7e69', fontStyle: 'italic' },
+      twoCol: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 },
+      creepList: { display: 'flex', flexDirection: 'column', gap: 8 },
+      creepItem: { display: 'flex', alignItems: 'center', gap: 16, padding: '12px 14px', background: '#fdf4ea', border: '1px solid #e8d6b8', borderRadius: 3, cursor: 'pointer', color: '#8a7e69' },
+      creepTicker: { fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, fontSize: 13, letterSpacing: '0.02em', color: '#2a2620' },
+      creepThesis: { fontSize: 12, color: '#5a5040', marginTop: 3, lineHeight: 1.4 },
+      creepMeta: { fontSize: 11, color: '#5a5040', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace' },
+      creepAge: { color: '#8a7e69', marginTop: 2 },
+      thesisList: { display: 'flex', flexDirection: 'column', gap: 10 },
+      thesisCard: { padding: '12px 14px', border: '1px solid #e3dbc8', borderRadius: 3, cursor: 'pointer', background: '#fdfbf5' },
+      thesisCardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 },
+      thesisTicker: { fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, fontSize: 13, letterSpacing: '0.03em' },
+      thesisAge: { fontSize: 10, color: '#8a7e69', fontFamily: 'JetBrains Mono, monospace' },
+      thesisStatement: { fontSize: 12, color: '#3a342a', lineHeight: 1.5 },
+      entryMiniList: { display: 'flex', flexDirection: 'column', gap: 10 },
+      entryMini: { display: 'flex', gap: 10, alignItems: 'flex-start' },
+      entryMiniIcon: { fontSize: 14, lineHeight: 1.4, width: 16 },
+      entryMiniTitle: { fontSize: 13, color: '#2a2620', lineHeight: 1.4 },
+      entryMiniMeta: { fontSize: 11, color: '#8a7e69', marginTop: 2 },
+      freqList: { display: 'flex', flexDirection: 'column', gap: 4 },
+      freqRow: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0ead9', fontSize: 13 },
+      freqCount: { fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#8a7e69' },
+      empty: { padding: '24px 12px', textAlign: 'center', color: '#8a7e69' },
+      emptyText: { fontStyle: 'italic', fontFamily: 'Fraunces, serif', fontSize: 14, marginBottom: 8 },
+      emptyCta: { background: 'transparent', border: 'none', color: '#2a2620', fontSize: 13, textDecoration: 'underline', textUnderlineOffset: 3 },
+      filterBar: { display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20, flexWrap: 'wrap' },
+      filterChips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+      filterChip: { padding: '5px 12px', background: 'transparent', border: '1px solid #d9d2c3', borderRadius: 100, fontSize: 12, color: '#5a5040' },
+      filterChipActive: { background: '#2a2620', color: '#f4f0e7', borderColor: '#2a2620' },
+      filterInput: { padding: '7px 12px', border: '1px solid #d9d2c3', borderRadius: 3, fontSize: 12, background: '#fff', minWidth: 200, outline: 'none' },
+      feed: { display: 'flex', flexDirection: 'column', gap: 14 },
+      entryCard: { background: '#fff', border: '1px solid #e3dbc8', borderRadius: 3, padding: '18px 22px' },
+      entryHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' },
+      entryHeaderLeft: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+      entryTypeChip: { fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', padding: '2px 8px', border: '1px solid', borderRadius: 2, fontWeight: 500 },
+      entryThesisLink: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', background: '#f4f0e7', border: '1px solid #e3dbc8', borderRadius: 2, color: '#5a5040' },
+      entryDate: { fontSize: 11, color: '#8a7e69', fontFamily: 'JetBrains Mono, monospace' },
+      entryTitle: { fontFamily: 'Fraunces, serif', fontSize: 18, fontWeight: 500, margin: '4px 0 8px', letterSpacing: '-0.01em', lineHeight: 1.3 },
+      entryBody: { fontSize: 14, lineHeight: 1.65, color: '#3a342a', whiteSpace: 'pre-wrap', fontFamily: 'Fraunces, serif' },
+      entryTags: { display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 14, paddingTop: 12, borderTop: '1px dashed #e3dbc8' },
+      tagPill: { display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '2px 8px', borderRadius: 100, fontWeight: 500, letterSpacing: '0.02em' },
+      tagBias: { background: '#fbf0d8', color: '#7c5e3c', border: '1px solid #e8d6b8' },
+      tagError: { background: '#f5e4e4', color: '#7a2f2f', border: '1px solid #e0bfbf' },
+      tagNeutral: { background: '#eef0e8', color: '#4a5040', border: '1px solid #d5d9c9' },
+      thesisGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 },
+      thesisGridCard: { background: '#fff', border: '1px solid #e3dbc8', borderRadius: 3, padding: '18px 20px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 140 },
+      thesisGridHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+      thesisGridTicker: { fontFamily: 'JetBrains Mono, monospace', fontSize: 15, fontWeight: 600, letterSpacing: '0.03em' },
+      thesisGridStatement: { flex: 1, fontSize: 13, lineHeight: 1.55, color: '#3a342a', fontFamily: 'Fraunces, serif' },
+      thesisGridFooter: { display: 'flex', gap: 6, fontSize: 11, color: '#8a7e69', alignItems: 'center', paddingTop: 8, borderTop: '1px dashed #e3dbc8', flexWrap: 'wrap' },
+      statusBadge: { fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 2, fontWeight: 600 },
+      backBtn: { background: 'transparent', border: 'none', color: '#5a5040', fontSize: 12, padding: 0, marginBottom: 16 },
+      thesisDetailHead: { display: 'flex', gap: 20, alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24, paddingBottom: 20, borderBottom: '1px solid #e3dbc8', flexWrap: 'wrap' },
+      thesisDetailMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' },
+      thesisDetailTitle: { fontFamily: 'Fraunces, serif', fontSize: 38, fontWeight: 500, margin: 0, letterSpacing: '-0.02em', lineHeight: 1.05, display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' },
+      thesisDetailTicker: { fontFamily: 'JetBrains Mono, monospace', fontSize: 24, background: '#2a2620', color: '#f4f0e7', padding: '2px 12px', borderRadius: 3, letterSpacing: '0.04em', fontWeight: 500 },
+      thesisDetailActions: { display: 'flex', gap: 8, flexWrap: 'wrap' },
+      lockedBox: { background: 'linear-gradient(to bottom, #fdf9ef, #f9f2dc)', border: '1px solid #e8d6a8', borderRadius: 3, padding: '24px 28px', marginBottom: 20 },
+      lockedHeader: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#7c5e3c', fontWeight: 600, marginBottom: 12, paddingBottom: 10, borderBottom: '1px dashed #d9c9a0', flexWrap: 'wrap' },
+      lockedSub: { marginLeft: 'auto', letterSpacing: '0.05em', textTransform: 'none', fontStyle: 'italic', fontWeight: 400, fontSize: 11, color: '#8a7e69', fontFamily: 'Fraunces, serif' },
+      lockedBody: { fontFamily: 'Fraunces, serif', fontSize: 17, lineHeight: 1.6, color: '#2a2620', marginBottom: 16, fontStyle: 'italic' },
+      lockedGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, paddingTop: 14, borderTop: '1px dashed #d9c9a0' },
+      lockedLabel: { fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#8a7e69', marginBottom: 5, fontWeight: 600 },
+      lockedText: { fontSize: 13, lineHeight: 1.55, color: '#3a342a', fontFamily: 'Fraunces, serif' },
+      lockedMetrics: { display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 16, paddingTop: 14, borderTop: '1px dashed #d9c9a0', fontSize: 12, color: '#3a342a' },
+      lockedMetricLabel: { color: '#8a7e69', marginRight: 4 },
+      outcomeBox: { background: '#fdfbf5', border: '1px solid #d9d2c3', borderRadius: 3, padding: '20px 24px', marginBottom: 20 },
+      outcomeHeader: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#5a5040', fontWeight: 600, marginBottom: 12, flexWrap: 'wrap' },
+      outcomeBody: { fontSize: 14, lineHeight: 1.65, color: '#3a342a', fontFamily: 'Fraunces, serif', whiteSpace: 'pre-wrap' },
+      timeline: { display: 'flex', flexDirection: 'column', gap: 14, paddingLeft: 12, borderLeft: '2px solid #e3dbc8', marginLeft: 8 },
+      ruleComposer: { background: '#fff', border: '1px solid #e3dbc8', borderRadius: 3, padding: '22px 24px', marginBottom: 20 },
+      rulesList: { display: 'flex', flexDirection: 'column', gap: 10 },
+      ruleCard: { display: 'flex', gap: 16, padding: '16px 20px', background: '#fff', border: '1px solid #e3dbc8', borderRadius: 3, alignItems: 'flex-start' },
+      ruleNumber: { fontFamily: 'Fraunces, serif', fontSize: 20, fontWeight: 500, color: '#7c5e3c', minWidth: 44 },
+      ruleText: { fontFamily: 'Fraunces, serif', fontSize: 15, lineHeight: 1.55, color: '#2a2620' },
+      ruleSource: { fontSize: 11, color: '#8a7e69', marginTop: 6, fontStyle: 'italic' },
+      ruleDate: { fontSize: 10, color: '#a89a7f', marginTop: 4, fontFamily: 'JetBrains Mono, monospace' },
+      candidateList: { display: 'flex', flexDirection: 'column', gap: 4 },
+      candidate: { display: 'flex', justifyContent: 'space-between', padding: '9px 12px', background: '#fdf9ef', border: '1px solid #f0e4c8', borderRadius: 3, fontSize: 13 },
+      modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(42,38,32,0.55)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '60px 20px', overflowY: 'auto' },
+      modal: { background: '#fdfbf5', border: '1px solid #d9d2c3', borderRadius: 4, width: '100%', maxWidth: 640, maxHeight: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(42,38,32,0.3)' },
+      modalHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: '1px solid #e3dbc8' },
+      modalTitle: { fontFamily: 'Fraunces, serif', fontSize: 22, fontWeight: 500, margin: 0, letterSpacing: '-0.01em' },
+      modalBody: { flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 },
+      modalFooter: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', padding: '14px 24px', borderTop: '1px solid #e3dbc8', background: '#f4f0e7' },
+      field: { display: 'flex', flexDirection: 'column', gap: 6 },
+      fieldLabel: { fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#5a5040', fontWeight: 600 },
+      fieldHint: { fontSize: 11, color: '#8a7e69', fontStyle: 'italic', marginTop: -2, marginBottom: 2, fontFamily: 'Fraunces, serif' },
+      fieldRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 },
+      input: { padding: '9px 12px', border: '1px solid #d9d2c3', borderRadius: 3, fontSize: 13, background: '#fff', color: '#2a2620', outline: 'none', width: '100%' },
+      textarea: { lineHeight: 1.55, fontFamily: "'Fraunces', serif", fontSize: 14 },
+      radioRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+      radioBtn: { padding: '6px 14px', background: '#fff', border: '1px solid #d9d2c3', borderRadius: 3, fontSize: 12, color: '#5a5040' },
+      radioBtnActive: { background: '#2a2620', color: '#f4f0e7', borderColor: '#2a2620' },
+      chipGrid: { display: 'flex', flexWrap: 'wrap', gap: 5 },
+      chip: { padding: '4px 10px', background: '#fff', border: '1px solid #e3dbc8', borderRadius: 100, fontSize: 11, color: '#5a5040' },
+      chipActiveBias: { background: '#fbf0d8', color: '#7c5e3c', borderColor: '#d9c9a0' },
+      chipActiveError: { background: '#f5e4e4', color: '#7a2f2f', borderColor: '#d9bfbf' },
+      chipAdd: { padding: '4px 10px', background: 'transparent', border: '1px dashed #c9bfa9', borderRadius: 100, fontSize: 11, color: '#8a7e69', display: 'inline-flex', alignItems: 'center', gap: 3 },
+      checkRow: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#3a342a', cursor: 'pointer' },
+      lockNotice: { display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#7c5e3c', background: '#fdf4ea', border: '1px solid #e8d6b8', borderRadius: 3, padding: '10px 14px', fontStyle: 'italic', lineHeight: 1.5, fontFamily: 'Fraunces, serif' },
+      creepWarning: { background: '#fdf4ea', border: '1px solid #e8d6b8', borderLeft: '3px solid #7c5e3c', borderRadius: 3, padding: '12px 14px' },
+      creepWarningHead: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#7c5e3c', fontWeight: 600, marginBottom: 8 },
+      creepWarningBody: { fontSize: 13, lineHeight: 1.55, color: '#3a342a', fontFamily: 'Fraunces, serif', fontStyle: 'italic' },
+      creepWarningInv: { fontSize: 12, color: '#5a5040', marginTop: 8, paddingTop: 8, borderTop: '1px dashed #d9c9a0', lineHeight: 1.5 },
+      mono: { fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }
+    };
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<InvestmentJournal />);
+  </script>
+</body>
+</html>
